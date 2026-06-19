@@ -66,4 +66,4 @@ streamlit run app.py
 * **Contextual Metric Cards:** Scorecards automatically color-code red or green depending on whether a retailer is overdue compared to their historical ordering rhythm.
 
 ---
-*Built by Rishit for the DS Group Internship 2026*
+
