@@ -1,0 +1,27 @@
+# Python Virtual Environment
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+
+# IDEs
+.vscode/
+.idea/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/
+
+# ⚠️ SENSITIVE DATA - DO NOT PUSH ⚠️
+data/
+processed/
+outputs/
+*.csv
+*.parquet
+
+# (Optional) If you don't want to push models, uncomment the line below. 
+# Since your models are <1MB, it's safe to push them so your app works out of the box on GitHub.
+# models/
