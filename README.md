@@ -39,9 +39,9 @@ This repository contains the source code for the **O2R Retailer Order Prediction
 
 ## 🚀 Running the App Locally
 
-> **Note regarding Data Privacy:** Due to NDA and data privacy constraints, the raw data (`data/`), processed parquet files (`processed/`), and output CSVs (`outputs/`) are excluded from this public repository. 
+> **Note regarding Data Privacy:** This working copy currently includes the data, processed parquet files, trained models, and generated output CSVs required to run the dashboard locally. If you publish the repository externally, review those folders carefully and remove or anonymize any NDA-restricted data first.
 
-To run the frontend interface, you must place the corresponding data files in their respective directories.
+If those files are missing in another environment, place the corresponding data artifacts in their expected directories before launching the app.
 
 **1. Clone the repository**
 ```bash
