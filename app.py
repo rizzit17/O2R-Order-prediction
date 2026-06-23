@@ -56,6 +56,8 @@ FEATURE_COLS = [
     'orders_last_7_days',
     'orders_last_14_days',
     'orders_last_30_days',
+    'momentum_7_30',
+    'momentum_14_30',
     'total_orders_so_far',
     'days_overdue',
     'is_overdue',
@@ -73,6 +75,7 @@ FEATURE_COLS = [
     'hubName_enc',
     'shopType_enc',
     'retailerType_enc',
+    'favorite_order_hour'
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -99,6 +102,10 @@ st.markdown("""
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def load_model():
+    cat_path = os.path.join(BASE, 'models', 'catboost_order_model.pkl')
+    if os.path.exists(cat_path):
+        with open(cat_path, 'rb') as f:
+            return pickle.load(f)
     with open(MODEL_PATH, 'rb') as f:
         return pickle.load(f)
 
@@ -198,7 +205,7 @@ def build_features_for_date(orders, profile, encoders, target_date):
 
     # Assemble
     f = (
-        profile[['customerId', 'hubName', 'shopType', 'retailerType', 'tenure_days']]
+        profile[['customerId', 'hubName', 'shopType', 'retailerType', 'first_order', 'favorite_order_hour', 'best_time_to_call']]
         .merge(last_ord[['customerId', 'last_order_date', 'days_since_last_order']], on='customerId', how='left')
         .merge(cnt(3),    on='customerId', how='left')
         .merge(cnt(7),    on='customerId', how='left')
@@ -215,10 +222,15 @@ def build_features_for_date(orders, profile, encoders, target_date):
         'orders_last_14_days': 0, 'orders_last_30_days': 0,
         'total_orders_so_far': 0,
         'avg_gap_between_orders': 30, 'std_gap_between_orders': 0,
-        'median_gap': 30, 'app_order_ratio': 0.5, 'tenure_days': 0
+        'median_gap': 30, 'app_order_ratio': 0.5, 'tenure_days': 0, 'favorite_order_hour': 0
     }
     f = f.fillna(fill)
+    f['best_time_to_call'] = f['best_time_to_call'].fillna('Unknown')
 
+    f['tenure_days'] = (target_date - pd.to_datetime(f['first_order'])).dt.days
+    f['tenure_days'] = f['tenure_days'].clip(lower=0).fillna(0)
+    f['momentum_7_30'] = f['orders_last_7_days'] / (f['orders_last_30_days'] + 1)
+    f['momentum_14_30'] = f['orders_last_14_days'] / (f['orders_last_30_days'] + 1)
     # Derived features
     f['days_overdue']     = (f['days_since_last_order'] - f['avg_gap_between_orders']).clip(lower=0)
     f['is_overdue']       = (f['days_overdue'] > 0).astype(int)
@@ -250,12 +262,14 @@ def build_features_for_date(orders, profile, encoders, target_date):
 # SCORE RETAILERS FOR A DATE (cached per date+threshold combo)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
-def score_retailers(target_date_str, threshold, _orders, _profile, _encoders, _model):
+def score_retailers(target_date_str, top_k, _orders, _profile, _encoders, _model):
     f = build_features_for_date(_orders, _profile, _encoders, target_date_str)
     X = np.nan_to_num(f[FEATURE_COLS].values, nan=0.0)
     f = f.copy()
     f['order_probability'] = _model.predict_proba(X)[:, 1]
-    f['will_order']        = (f['order_probability'] >= threshold).astype(int)
+    f = f.sort_values('order_probability', ascending=False)
+    f['will_order'] = 0
+    f.iloc[:top_k, f.columns.get_loc('will_order')] = 1
     return f
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -287,7 +301,7 @@ with st.spinner("Loading model and data..."):
     may_schedule = load_may_schedule()
     next_order   = load_next_order()
 
-clf_model = saved_model['model']
+clf_model = saved_model['model'] if isinstance(saved_model, dict) else saved_model
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
@@ -312,35 +326,17 @@ with st.sidebar:
     ], label_visibility="collapsed")
 
     st.markdown("---")
-    st.markdown("Call Threshold")
-    if "threshold_pct" not in st.session_state:
-        st.session_state.threshold_pct = 40
-
-    # Number input
-    new_value = st.number_input(
-        "Enter Threshold (%)",
-        min_value=10,
-        max_value=99,
-        value=st.session_state.threshold_pct,
-        step=1
+    st.markdown("### Call Strategy")
+    if 'top_k' not in st.session_state:
+        st.session_state.top_k = 100
+    top_k_options = [100, 500, 1000, 1500, 2000]
+    top_k = st.selectbox(
+        "Select Top-K Retailers to Call",
+        options=top_k_options,
+        index=top_k_options.index(st.session_state.top_k) if st.session_state.top_k in top_k_options else 0
     )
-
-    st.session_state.threshold_pct = new_value
-
-    # Slider
-    slider_value = st.slider(
-        "Min probability to call",
-        min_value=10,
-        max_value=99,
-        value=st.session_state.threshold_pct,
-        step=1
-    )
-
-    st.session_state.threshold_pct = slider_value
-
-    threshold = st.session_state.threshold_pct / 100
-    st.caption(f"Calling retailers with ≥ {int(threshold*100)}% probability")
-
+    st.session_state.top_k = top_k
+    st.caption(f"Calling the top {top_k} highest probability retailers")
     st.markdown("---")
     st.markdown("### 📅 Prediction Date")
     pred_date = st.date_input(
@@ -358,7 +354,7 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────────────────────
 with st.spinner(f"Scoring retailers for {pred_date}..."):
     preds = score_retailers(
-        str(pred_date), threshold,
+        str(pred_date), top_k,
         orders, profile, encoders, clf_model
     )
 
@@ -377,7 +373,7 @@ if page == "Overview":
     st.title("O2R Order Prediction")
     st.markdown(
         f"**Prediction date:** {pd.Timestamp(pred_date).strftime('%A, %B %d 2026')} &nbsp;|&nbsp;"
-        f"**Threshold:** {int(threshold*100)}%"
+        f"**Top-K:** {top_k}"
     )
     st.markdown("---")
 
@@ -415,9 +411,10 @@ if page == "Overview":
         color_discrete_sequence=['#2196F3'],
         labels={'order_probability': 'Order Probability'}
     )
+    actual_threshold = preds[preds['will_order'] == 1]['order_probability'].min() if to_call > 0 else 0
     fig_dist.add_vline(
-        x=threshold, line_dash='dash', line_color='red', line_width=2,
-        annotation_text=f"Call threshold ({int(threshold*100)}%)",
+        x=actual_threshold, line_dash='dash', line_color='red', line_width=2,
+        annotation_text=f"Top-K threshold",
         annotation_position="top right"
     )
     fig_dist.update_layout(
@@ -515,6 +512,7 @@ elif page == "Daily Call List":
         'days_since_last_order', 'avg_gap_between_orders',
         'days_overdue', 'orders_last_7_days',
         'total_orders_so_far', 'app_order_ratio',
+        'favorite_order_hour', 'best_time_to_call',
         'last_order_date'
     ]].copy()
 
@@ -523,6 +521,7 @@ elif page == "Daily Call List":
     display['days_overdue']           = display['days_overdue'].round(1)
     display['app_order_ratio']        = (display['app_order_ratio'] * 100).round(0).astype(int)
     display['Action']                 = display['will_order'].map({1: '📞 CALL', 0: '⏭️ SKIP'})
+    display['favorite_order_hour']    = pd.to_datetime(display['favorite_order_hour'].astype(int).astype(str).str.zfill(2), format='%H').dt.strftime('%I %p')
 
     if 'last_order_date' in display.columns:
         display['last_order_date'] = pd.to_datetime(display['last_order_date']).dt.date
@@ -539,6 +538,8 @@ elif page == "Daily Call List":
         'orders_last_7_days':     'Orders (7d)',
         'total_orders_so_far':    'Total Orders',
         'app_order_ratio':        'App Usage %',
+        'favorite_order_hour':    'Order Hour',
+        'best_time_to_call':      'Best Time',
         'last_order_date':        'Last Order Date',
     })
 
@@ -556,12 +557,28 @@ elif page == "Daily Call List":
 
     # Download
     csv_bytes = display.reset_index(names='Rank').to_csv(index=False).encode('utf-8')
-    st.download_button(
-        "⬇️ Download Call List CSV",
-        data=csv_bytes,
-        file_name=f"call_list_{pred_date}.csv",
-        mime='text/csv'
-    )
+    
+    # CRM Export logic
+    crm_display = display[display['Action'] == '📞 CALL'].reset_index(names='Rank').copy()
+    crm_display['Phone Number'] = 'Not Provided'
+    crm_export = crm_display[['Retailer ID', 'Rank', 'Action', 'Order Hour', 'Best Time', 'Phone Number']].copy()
+    crm_csv = crm_export.to_csv(index=False).encode('utf-8')
+
+    d1, d2 = st.columns([1, 1])
+    with d1:
+        st.download_button(
+            label="⬇️ Download Call List CSV",
+            data=csv_bytes,
+            file_name=f"call_list_{pred_date}.csv",
+            mime='text/csv'
+        )
+    with d2:
+        st.download_button(
+            label="📞 Download CRM Dialer Export",
+            data=crm_csv,
+            file_name=f"crm_export_{pred_date}.csv",
+            mime='text/csv'
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -617,7 +634,9 @@ elif page == "May Schedule":
     st.dataframe(table, use_container_width=True, hide_index=True)
 
     csv_may = table.to_csv(index=False).encode('utf-8')
-    st.download_button(
+    d1, d2 = st.columns([1, 1])
+    with d1:
+        st.download_button(
         "⬇️ Download May Schedule CSV",
         data=csv_may,
         file_name="may_2026_call_schedule.csv",
@@ -694,7 +713,7 @@ elif page == "Model Performance":
 
         def hl_threshold(row):
             t_val = int(row['Threshold'].replace('%','')) / 100
-            if abs(t_val - threshold) < 0.01:
+            if False:
                 return ['background-color: #1a3a5c; font-weight:bold'] * len(row)
             return [''] * len(row)
 
@@ -703,7 +722,6 @@ elif page == "Model Performance":
             use_container_width=True,
             hide_index=True
         )
-        st.caption(f"Highlighted row = current threshold ({int(threshold*100)}%)")
     else:
         st.info("Threshold analysis is available when predictions are made for dates within the dataset (May 2026).")
 
@@ -817,7 +835,9 @@ elif page == "Next Order Dates":
     st.dataframe(disp_n, use_container_width=True, height=500, hide_index=True)
 
     csv_n = disp_n.to_csv(index=False).encode('utf-8')
-    st.download_button(
+    d1, d2 = st.columns([1, 1])
+    with d1:
+        st.download_button(
         "⬇️ Download Next Order Schedule CSV",
         data=csv_n,
         file_name="next_order_schedule_may2026.csv",
