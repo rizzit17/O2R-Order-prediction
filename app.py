@@ -1,8 +1,18 @@
+"""
+O2R Order Prediction Dashboard
+Streamlit app | Trained: Jan–Apr 2026 | Predicts: May 2026
+
+Run with:
+    streamlit run app.py
+
+Requires Notebook A and Notebook B to have been run first.
+"""
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import pickle, os, warnings
-from datetime import datetime, timedelta
+from datetime import timedelta
 import plotly.express as px
 import plotly.graph_objects as go
 warnings.filterwarnings('ignore')
@@ -11,364 +21,388 @@ warnings.filterwarnings('ignore')
 # PAGE CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="O2R : Order Prediction",
+    page_title="O2R Order Prediction",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PATHS — UPDATE BASE_DIR TO YOUR PROJECT FOLDER
+BASE = r'C:\Users\Rishit\Desktop\O2R-Order-prediction'
 # ─────────────────────────────────────────────────────────────────────────────
-BASE_DIR       = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH     = os.path.join(BASE_DIR, 'models',    'xgboost_order_model.pkl')
-REG_MODEL_PATH = os.path.join(BASE_DIR, 'models',    'xgboost_next_order_model.pkl')
-ENCODER_PATH   = os.path.join(BASE_DIR, 'processed', 'label_encoders.pkl')
-PROFILE_PATH   = os.path.join(BASE_DIR, 'processed', 'retailer_profiles.parquet')
-RAW_CSV_PATH   = os.path.join(BASE_DIR, 'data', "Jan - May '26 Data.csv")
-OUTPUTS_DIR    = os.path.join(BASE_DIR, 'outputs')
+
+RAW_PATH        = os.path.join(BASE, 'data',      "Jan - May '26 Data.csv")
+MODEL_PATH      = os.path.join(BASE, 'models',    'xgboost_order_model.pkl')
+REG_MODEL_PATH  = os.path.join(BASE, 'models',    'xgboost_next_order_model.pkl')
+ENCODER_PATH    = os.path.join(BASE, 'processed', 'label_encoders.pkl')
+PROFILE_PATH    = os.path.join(BASE, 'processed', 'retailer_profiles.parquet')
+OUTPUTS_DIR     = os.path.join(BASE, 'outputs')
+
+# Output files produced by Notebook B
+MAY_SCHEDULE_PATH  = os.path.join(OUTPUTS_DIR, 'may_2026_call_schedule.csv')
+NEXT_ORDER_PATH    = os.path.join(OUTPUTS_DIR, 'next_order_prediction_may2026.csv')
+
+COST_PER_MIN  = 8
+AVG_CALL_MINS = 2
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE COLUMNS — must match NotebookA exactly
+# ─────────────────────────────────────────────────────────────────────────────
+FEATURE_COLS = [
+    'days_since_last_order',
+    'avg_gap_between_orders',
+    'std_gap_between_orders',
+    'median_gap',
+    'orders_last_3_days',
+    'orders_last_7_days',
+    'orders_last_14_days',
+    'orders_last_30_days',
+    'total_orders_so_far',
+    'days_overdue',
+    'is_overdue',
+    'order_regularity',
+    'overdue_ratio',
+    'app_order_ratio',
+    'tenure_days',
+    'day_of_week',
+    'day_of_month',
+    'week_of_month',
+    'month',
+    'is_weekend',
+    'is_month_start',
+    'is_month_end',
+    'hubName_enc',
+    'shopType_enc',
+    'retailerType_enc',
+]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STYLING
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-[data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: 700; }
-.section-header {
-    background: linear-gradient(90deg, #1e3a5f, #0d1b2a);
-    padding: 10px 18px; border-radius: 8px;
-    color: #e0e0e0; font-size: 1.05rem; font-weight: 600;
-    margin-bottom: 12px;
+[data-testid="stMetricValue"] { font-size: 1.9rem; font-weight: 700; }
+[data-testid="stMetricDelta"] { font-size: 0.9rem; }
+.info-box {
+    background: #0d1b2a;
+    border-left: 4px solid #2196F3;
+    padding: 12px 16px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    font-size: 0.9rem;
+    color: #cdd8e3;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CACHED LOADERS
+# CACHED DATA LOADERS
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_model():
     with open(MODEL_PATH, 'rb') as f:
         return pickle.load(f)
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_reg_model():
     if not os.path.exists(REG_MODEL_PATH):
         return None
     with open(REG_MODEL_PATH, 'rb') as f:
         return pickle.load(f)
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_encoders():
     with open(ENCODER_PATH, 'rb') as f:
         return pickle.load(f)
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def load_profile():
     return pd.read_parquet(PROFILE_PATH)
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def load_orders():
-    df = pd.read_csv(RAW_CSV_PATH)
+    df = pd.read_csv(RAW_PATH)
     df['createdAt'] = pd.to_datetime(df['createdAt'], dayfirst=True)
-    confirmed = df[df['orderStatus'].isin(['Delivered','PartiallyDelivered'])]
+    confirmed = df[df['orderStatus'].isin(['Delivered', 'PartiallyDelivered'])]
     orders = confirmed.drop_duplicates(subset='orderNumber')[[
-        'orderNumber','customerId','createdAt',
-        'hubName','shopType','retailerType','orderSource'
+        'orderNumber', 'customerId', 'createdAt',
+        'hubName', 'shopType', 'retailerType', 'orderSource'
     ]].copy()
-    return orders.sort_values(['customerId','createdAt'])
+    return orders.sort_values(['customerId', 'createdAt'])
 
-@st.cache_data
-def load_june_schedule():
-    path = os.path.join(OUTPUTS_DIR, 'next_order_prediction_june2026.csv')
-    if os.path.exists(path):
-        df = pd.read_csv(path)
-        df['predicted_next_order_date'] = pd.to_datetime(df['predicted_next_order_date'])
-        df['last_order_date']           = pd.to_datetime(df['last_order_date'])
-        return df
-    return None
+@st.cache_data(show_spinner=False)
+def load_may_schedule():
+    if not os.path.exists(MAY_SCHEDULE_PATH):
+        return None
+    df = pd.read_csv(MAY_SCHEDULE_PATH)
+    df['date'] = pd.to_datetime(df['date'])
+    return df
 
-@st.cache_data
-def load_june_call_schedule():
-    path = os.path.join(OUTPUTS_DIR, 'june_2026_call_schedule.csv')
-    if os.path.exists(path):
-        df = pd.read_csv(path)
-        df['date'] = pd.to_datetime(df['date'])
-        return df
-    return None
+@st.cache_data(show_spinner=False)
+def load_next_order():
+    if not os.path.exists(NEXT_ORDER_PATH):
+        return None
+    df = pd.read_csv(NEXT_ORDER_PATH)
+    df['predicted_next_order_date'] = pd.to_datetime(df['predicted_next_order_date'])
+    df['last_order_date']           = pd.to_datetime(df['last_order_date'])
+    return df
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FEATURE BUILDER (same logic as Notebook 4)
+# FEATURE BUILDER — identical logic to Notebook B build_features_for_date()
 # ─────────────────────────────────────────────────────────────────────────────
 def build_features_for_date(orders, profile, encoders, target_date):
     target_date = pd.Timestamp(target_date)
-    hist = orders[orders['createdAt'] < target_date].copy()
+    hist        = orders[orders['createdAt'] < target_date].copy()
 
-    last_order = hist.groupby('customerId')['createdAt'].max().reset_index()
-    last_order.columns = ['customerId','last_order_date']
-    last_order['days_since_last_order'] = (target_date - last_order['last_order_date']).dt.days
+    # Last order date & days since
+    last_ord = hist.groupby('customerId')['createdAt'].max().reset_index()
+    last_ord.columns = ['customerId', 'last_order_date']
+    last_ord['days_since_last_order'] = (target_date - last_ord['last_order_date']).dt.days
 
+    # Rolling counts
     def cnt(n):
         cut = target_date - pd.Timedelta(days=n)
-        return (hist[hist['createdAt'] >= cut]
-                .groupby('customerId')['orderNumber'].count()
-                .reset_index()
-                .rename(columns={'orderNumber': f'orders_last_{n}_days'}))
+        return (
+            hist[hist['createdAt'] >= cut]
+            .groupby('customerId')['orderNumber'].count()
+            .reset_index()
+            .rename(columns={'orderNumber': f'orders_last_{n}_days'})
+        )
 
-    hist_s = hist.sort_values(['customerId','createdAt'])
+    # Total orders so far
+    total_sf = (
+        hist.groupby('customerId')['orderNumber'].count()
+        .reset_index()
+        .rename(columns={'orderNumber': 'total_orders_so_far'})
+    )
+
+    # Gap statistics
+    hist_s       = hist.sort_values(['customerId', 'createdAt'])
     hist_s['gap'] = hist_s.groupby('customerId')['createdAt'].diff().dt.days
     gap_stats = hist_s.groupby('customerId')['gap'].agg(
         avg_gap_between_orders='mean',
         std_gap_between_orders='std',
         median_gap='median'
-    ).reset_index().fillna({'avg_gap_between_orders':30,
-                             'std_gap_between_orders':0,
-                             'median_gap':30})
+    ).reset_index().fillna({
+        'avg_gap_between_orders': 30,
+        'std_gap_between_orders': 0,
+        'median_gap': 30
+    })
 
-    total_sf = (hist.groupby('customerId')['orderNumber'].count()
-                .reset_index().rename(columns={'orderNumber':'total_orders_so_far'}))
+    # App ratio
+    app_r = (
+        hist.groupby('customerId')
+        .apply(lambda x: (x['orderSource'] == 'App').mean())
+        .reset_index()
+    )
+    app_r.columns = ['customerId', 'app_order_ratio']
 
-    app_r = (hist.groupby('customerId')
-             .apply(lambda x: (x['orderSource']=='App').mean())
-             .reset_index())
-    app_r.columns = ['customerId','app_order_ratio']
-
-    f = (profile[['customerId','hubName','shopType','retailerType','tenure_days']]
-         .merge(last_order[['customerId','last_order_date','days_since_last_order']], on='customerId', how='left')
-         .merge(cnt(3),    on='customerId', how='left')
-         .merge(cnt(7),    on='customerId', how='left')
-         .merge(cnt(14),   on='customerId', how='left')
-         .merge(cnt(30),   on='customerId', how='left')
-         .merge(total_sf,  on='customerId', how='left')
-         .merge(gap_stats, on='customerId', how='left')
-         .merge(app_r,     on='customerId', how='left'))
+    # Assemble
+    f = (
+        profile[['customerId', 'hubName', 'shopType', 'retailerType', 'tenure_days']]
+        .merge(last_ord[['customerId', 'last_order_date', 'days_since_last_order']], on='customerId', how='left')
+        .merge(cnt(3),    on='customerId', how='left')
+        .merge(cnt(7),    on='customerId', how='left')
+        .merge(cnt(14),   on='customerId', how='left')
+        .merge(cnt(30),   on='customerId', how='left')
+        .merge(total_sf,  on='customerId', how='left')
+        .merge(gap_stats, on='customerId', how='left')
+        .merge(app_r,     on='customerId', how='left')
+    )
 
     fill = {
-        'days_since_last_order':999,'orders_last_3_days':0,
-        'orders_last_7_days':0,'orders_last_14_days':0,'orders_last_30_days':0,
-        'total_orders_so_far':0,'avg_gap_between_orders':30,
-        'std_gap_between_orders':0,'median_gap':30,'app_order_ratio':0.5,'tenure_days':0
+        'days_since_last_order': 999,
+        'orders_last_3_days': 0, 'orders_last_7_days': 0,
+        'orders_last_14_days': 0, 'orders_last_30_days': 0,
+        'total_orders_so_far': 0,
+        'avg_gap_between_orders': 30, 'std_gap_between_orders': 0,
+        'median_gap': 30, 'app_order_ratio': 0.5, 'tenure_days': 0
     }
     f = f.fillna(fill)
 
-    f['days_overdue']      = (f['days_since_last_order'] - f['avg_gap_between_orders']).clip(lower=0)
-    f['is_overdue']        = (f['days_overdue'] > 0).astype(int)
-    f['order_regularity']  = 1 / (f['std_gap_between_orders'] + 1)
-    f['overdue_ratio']     = (f['days_since_last_order'] / (f['avg_gap_between_orders']+1)).clip(upper=10).round(3)
-    f['day_of_week']       = target_date.dayofweek
-    f['day_of_month']      = target_date.day
-    f['week_of_month']     = (target_date.day - 1) // 7 + 1
-    f['month']             = target_date.month
-    f['is_weekend']        = int(target_date.dayofweek >= 5)
-    f['is_month_start']    = int(target_date.day <= 3)
-    f['is_month_end']      = int(target_date.day >= 28)
-    f['date']              = target_date
+    # Derived features
+    f['days_overdue']     = (f['days_since_last_order'] - f['avg_gap_between_orders']).clip(lower=0)
+    f['is_overdue']       = (f['days_overdue'] > 0).astype(int)
+    f['order_regularity'] = 1 / (f['std_gap_between_orders'] + 1)
+    f['overdue_ratio']    = (
+        f['days_since_last_order'] / (f['avg_gap_between_orders'] + 1)
+    ).clip(upper=10).round(3)
 
-    for col in ['hubName','shopType','retailerType']:
+    # Temporal
+    f['day_of_week']    = target_date.dayofweek
+    f['day_of_month']   = target_date.day
+    f['week_of_month']  = (target_date.day - 1) // 7 + 1
+    f['month']          = target_date.month
+    f['is_weekend']     = int(target_date.dayofweek >= 5)
+    f['is_month_start'] = int(target_date.day <= 3)
+    f['is_month_end']   = int(target_date.day >= 28)
+    f['date']           = target_date
+
+    # Encode categoricals with saved encoders
+    for col in ['hubName', 'shopType', 'retailerType']:
         le    = encoders[col]
         known = set(le.classes_)
         f[col]          = f[col].apply(lambda x: x if str(x) in known else le.classes_[0])
-        f[col+'_enc']   = le.transform(f[col].astype(str))
+        f[col + '_enc'] = le.transform(f[col].astype(str))
 
     return f
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOAD EVERYTHING
+# SCORE RETAILERS FOR A DATE (cached per date+threshold combo)
 # ─────────────────────────────────────────────────────────────────────────────
-try:
-    with st.spinner("Loading model and data..."):
-        model_data  = load_model()
-        encoders    = load_encoders()
-        profile     = load_profile()
-        orders      = load_orders()
-        reg_data    = load_reg_model()
-        june_sched  = load_june_schedule()
-        june_calls  = load_june_call_schedule()
-except Exception as e:
-    st.error(f"Failed to load: {e}")
-    st.info("Run all 5 notebooks first, then relaunch this app.")
+@st.cache_data(show_spinner=False)
+def score_retailers(target_date_str, threshold, _orders, _profile, _encoders, _model):
+    f = build_features_for_date(_orders, _profile, _encoders, target_date_str)
+    X = np.nan_to_num(f[FEATURE_COLS].values, nan=0.0)
+    f = f.copy()
+    f['order_probability'] = _model.predict_proba(X)[:, 1]
+    f['will_order']        = (f['order_probability'] >= threshold).astype(int)
+    return f
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOAD EVERYTHING AT STARTUP
+# ─────────────────────────────────────────────────────────────────────────────
+missing = []
+for label, path in [
+    ('Classification model',  MODEL_PATH),
+    ('Label encoders',        ENCODER_PATH),
+    ('Retailer profiles',     PROFILE_PATH),
+    ('Raw CSV',               RAW_PATH),
+]:
+    if not os.path.exists(path):
+        missing.append(f'❌ {label}: `{path}`')
+
+if missing:
+    st.error("### Missing files — run Notebook A first")
+    for m in missing:
+        st.markdown(m)
+    st.info("Once Notebook A is complete, run Notebook B as well for the full May schedule and next-order predictions.")
     st.stop()
 
-FEATURE_COLS = model_data['feature_cols']
-model        = model_data['model']
-history_end  = orders['createdAt'].max().normalize()
-forecast_min = (history_end + pd.Timedelta(days=1)).to_pydatetime()
-forecast_max = (history_end + pd.Timedelta(days=90)).to_pydatetime()
-default_pred = forecast_min
+with st.spinner("Loading model and data..."):
+    saved_model  = load_model()
+    encoders     = load_encoders()
+    profile      = load_profile()
+    orders       = load_orders()
+    reg_saved    = load_reg_model()
+    may_schedule = load_may_schedule()
+    next_order   = load_next_order()
 
-PAGE_OPTIONS = {
-    'landing': 'Landing Page',
-    'overview': 'Overview',
-    'daily_call_list': 'Daily Call List',
-    'june_schedule': 'June Schedule',
-    'model_performance': 'Model Performance',
-    'next_order_dates': 'Next Order Dates',
-}
+clf_model = saved_model['model']
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────────────────────────────────────
-if 'current_page' not in st.session_state:
-    st.session_state.current_page = PAGE_OPTIONS['landing']
-if 'page_selector' not in st.session_state:
-    st.session_state.page_selector = st.session_state.current_page
-elif st.session_state.page_selector != st.session_state.current_page:
-    st.session_state.page_selector = st.session_state.current_page
-
 with st.sidebar:
-    st.markdown("**O2R Order Prediction**")
-    st.markdown(f"*Model trained: {model_data.get('trained_on', 'Historical data')}*")
-    st.markdown(f"*Forecast window: {forecast_min.strftime('%b %d, %Y')} to {forecast_max.strftime('%b %d, %Y')}*")
-    st.markdown("---")
-
-    page_options = [
-        PAGE_OPTIONS["landing"],
-        PAGE_OPTIONS["overview"],
-        PAGE_OPTIONS["daily_call_list"],
-        PAGE_OPTIONS["june_schedule"],
-        PAGE_OPTIONS["model_performance"],
-        PAGE_OPTIONS["next_order_dates"],
-    ]
-    page = st.radio(
-        "",
-        page_options,
-        index=page_options.index(st.session_state.current_page),
-        key="page_selector",
-        label_visibility="collapsed"
+    st.markdown("**O2R Order Prediction System**")
+    st.markdown(
+        f"<div class='info-box'>"
+        f"Trained on: <b>Jan–Apr 2026</b><br>"
+        f"Predicts for: <b>May 2026</b>"
+        f"</div>",
+        unsafe_allow_html=True
     )
-    if page != st.session_state.current_page:
-        st.session_state.current_page = page
+
+    st.markdown("---")
+    page = st.radio("", [
+        "Overview",
+        "Daily Call List",
+        "May Schedule",
+        "Model Performance",
+        "Next Order Dates",
+    ], label_visibility="collapsed")
 
     st.markdown("---")
     st.markdown("Call Threshold")
-    threshold = st.slider(
+    if "threshold_pct" not in st.session_state:
+        st.session_state.threshold_pct = 40
+
+    # Number input
+    new_value = st.number_input(
+        "Enter Threshold (%)",
+        min_value=10,
+        max_value=99,
+        value=st.session_state.threshold_pct,
+        step=1
+    )
+
+    st.session_state.threshold_pct = new_value
+
+    # Slider
+    slider_value = st.slider(
         "Min probability to call",
-        min_value=0.10, max_value=0.90,
-        value=float(model_data.get('threshold', 0.4)),
-        step=0.05
+        min_value=10,
+        max_value=99,
+        value=st.session_state.threshold_pct,
+        step=1
     )
-    st.caption(f"Calling retailers with >= {int(threshold*100)}% order probability")
+
+    st.session_state.threshold_pct = slider_value
+
+    threshold = st.session_state.threshold_pct / 100
+    st.caption(f"Calling retailers with ≥ {int(threshold*100)}% probability")
 
     st.markdown("---")
-    st.markdown("### Forecast Date")
+    st.markdown("### 📅 Prediction Date")
     pred_date = st.date_input(
-        "Select a forecast date",
-        value=default_pred,
-        min_value=forecast_min,
-        max_value=forecast_max
+        "Select a May date",
+        value=pd.Timestamp('2026-05-15').date(),
+        min_value=pd.Timestamp('2026-05-01').date(),
+        max_value=pd.Timestamp('2026-05-31').date(),
+        help="Model uses Jan–Apr history to predict this date"
     )
 
     st.markdown("---")
 
-# ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+# ─────────────────────────────────────────────────────────────────────────────
 # GENERATE PREDICTIONS FOR SELECTED DATE
-# ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
-@st.cache_data(show_spinner=False)
-def get_predictions(pred_date_str, threshold):
-    f = build_features_for_date(orders, profile, encoders, pred_date_str)
-    X = np.nan_to_num(f[FEATURE_COLS].values, nan=0.0)
-    f = f.copy()
-    f['order_probability'] = model.predict_proba(X)[:, 1]
-    f['will_order']        = (f['order_probability'] >= threshold).astype(int)
-    return f
+# ─────────────────────────────────────────────────────────────────────────────
+with st.spinner(f"Scoring retailers for {pred_date}..."):
+    preds = score_retailers(
+        str(pred_date), threshold,
+        orders, profile, encoders, clf_model
+    )
 
-preds = None
-if page != PAGE_OPTIONS["landing"]:
-    with st.spinner(f"Scoring retailers for {pred_date}..."):
-        preds = get_predictions(str(pred_date), threshold)
+total_r   = len(preds)
+to_call   = int(preds['will_order'].sum())
+to_skip   = total_r - to_call
+reduction = (1 - to_call / total_r) * 100
+old_cost  = total_r * COST_PER_MIN * AVG_CALL_MINS
+new_cost  = to_call * COST_PER_MIN * AVG_CALL_MINS
+savings   = old_cost - new_cost
 
-# PAGE: LANDING
-if page == PAGE_OPTIONS["landing"]:
-    st.title("O2R Order Prediction")
-    st.markdown("A machine learning dashboard for retailer order propensity, call prioritization, and next-order planning.")
-    st.markdown("---")
-
-    left, right = st.columns([1.2, 1])
-    with left:
-        st.subheader("What This Dashboard Does")
-        st.markdown("""
-- Scores each retailer for a selected forecast date using order probability.
-- Generates a daily call priority list so the team can focus on the most likely buyers.
-- Shows forecasted call reduction and business impact from selective outreach.
-- Summarizes precomputed schedules and next-order timelines.
-- Supports planning with both classification and regression outputs.
-""")
-
-        st.subheader("ML Concepts Used")
-        st.markdown("""
-- Supervised learning for retailer-level daily order prediction.
-- Binary classification to estimate whether a retailer will order on a given day.
-- Regression to estimate days until the next expected order.
-- Time-aware validation using past data to predict future periods.
-- Class imbalance handling with weighted learning and threshold-based decisions.
-- Ranking retailers by predicted probability instead of using a manual rule.
-""")
-
-    with right:
-        st.subheader("Feature Engineering Used")
-        st.markdown("""
-- Recency features such as days since last order.
-- Frequency features such as orders in the last 3, 7, 14, and 30 days.
-- Gap features such as average, median, and standard deviation of order gaps.
-- Overdue features such as days overdue and overdue ratio.
-- Calendar features such as day of week, month boundaries, and weekend flags.
-- Retailer profile features such as hub, shop type, retailer type, tenure, and app-order ratio.
-""")
-
-        st.subheader("Models and Outputs")
-        st.markdown("""
-- XGBoost Classifier for order probability scoring.
-- XGBoost Regressor for next-order date estimation.
-- Threshold-based call decisions for operational use.
-- Ranked call lists, schedule views, and performance summaries inside the engine.
-""")
-
-    st.markdown("---")
-    if st.button("Proceed to Engine", type="primary", use_container_width=True):
-        st.session_state.current_page = PAGE_OPTIONS["overview"]
-        st.rerun()
-
+# ─────────────────────────────────────────────────────────────────────────────
 # PAGE: OVERVIEW
-if page == PAGE_OPTIONS["overview"]:
-    st.title("O2R : Retailer Order Prediction")
+# ─────────────────────────────────────────────────────────────────────────────
+if page == "Overview":
+    st.title("O2R Order Prediction")
     st.markdown(
-        f"**Model:** Trained on {model_data.get('trained_on', 'historical data')} "
-        f"&nbsp;|&nbsp; **Predicting for:** {pred_date.strftime('%B %d, %Y')}"
+        f"**Prediction date:** {pd.Timestamp(pred_date).strftime('%A, %B %d 2026')} &nbsp;|&nbsp;"
+        f"**Threshold:** {int(threshold*100)}%"
     )
     st.markdown("---")
 
-    total     = len(preds)
-    to_call   = int(preds['will_order'].sum())
-    to_skip   = total - to_call
-    reduction = (1 - to_call / total) * 100
-
+    # KPI row
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Retailers",   f"{total:,}")
-    c2.metric("📞 Call Today",     f"{to_call:,}", delta=f"-{to_skip:,} skipped")
+    c1.metric("Total Retailers",   f"{total_r:,}")
+    c2.metric("📞 Call Today",     f"{to_call:,}", delta=f"−{to_skip:,} skipped", delta_color="normal")
     c3.metric("📉 Call Reduction", f"{reduction:.1f}%")
-    c4.metric("Avg Probability",   f"{preds['order_probability'].mean()*100:.1f}%")
+    c4.metric("💸 Daily Saving",   f"₹{savings:,}")
 
     st.markdown("---")
 
-    # Business impact
-    st.subheader("Estimated Business Impact")
+    # Business impact comparison
+    st.subheader("Business Impact")
     col_a, col_b = st.columns(2)
-    COST_PER_MIN  = 8
-    AVG_CALL_MINS = 2
-
     with col_a:
-        st.markdown("**Before (Calling Everyone)**")
-        cur_cost = total * COST_PER_MIN * AVG_CALL_MINS
-        st.markdown(f"- Daily calls: **{total:,}**")
-        st.markdown(f"- AI voice cost @ ₹{COST_PER_MIN}/min × {AVG_CALL_MINS} min")
-        st.markdown(f"- **Daily cost: ₹{cur_cost:,}**")
-        st.markdown(f"- Monthly (26 days): **₹{cur_cost*26:,}**")
-
+        st.markdown("**Before — Calling Everyone**")
+        st.markdown(f"- Daily calls: **{total_r:,}**")
+        st.markdown(f"- AI voice cost: ₹{COST_PER_MIN}/min × {AVG_CALL_MINS} min avg")
+        st.markdown(f"- **Daily cost: ₹{old_cost:,}**")
+        st.markdown(f"- Monthly (26 working days): **₹{old_cost*26:,}**")
     with col_b:
-        st.markdown("**After (With Model)**")
-        new_cost = to_call * COST_PER_MIN * AVG_CALL_MINS
-        savings  = cur_cost - new_cost
+        st.markdown("**After — With Prediction Model**")
         st.markdown(f"- Daily calls: **{to_call:,}**")
-        st.markdown(f"- AI voice cost @ ₹{COST_PER_MIN}/min × {AVG_CALL_MINS} min")
+        st.markdown(f"- AI voice cost: ₹{COST_PER_MIN}/min × {AVG_CALL_MINS} min avg")
         st.markdown(f"- **Daily cost: ₹{new_cost:,}**")
         st.success(f"💸 Daily saving: ₹{savings:,}  |  Monthly: ₹{savings*26:,}")
 
@@ -376,89 +410,122 @@ if page == PAGE_OPTIONS["overview"]:
 
     # Probability distribution
     st.subheader(f"Probability Distribution — {pred_date}")
-    fig = px.histogram(preds, x='order_probability', nbins=50,
-                       color_discrete_sequence=['#2196F3'],
-                       labels={'order_probability':'Predicted Order Probability'})
-    fig.add_vline(x=threshold, line_dash='dash', line_color='red',
-                  annotation_text=f"Threshold ({int(threshold*100)}%)")
-    fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                      xaxis_title='Order Probability', yaxis_title='Retailers', showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
+    fig_dist = px.histogram(
+        preds, x='order_probability', nbins=50,
+        color_discrete_sequence=['#2196F3'],
+        labels={'order_probability': 'Order Probability'}
+    )
+    fig_dist.add_vline(
+        x=threshold, line_dash='dash', line_color='red', line_width=2,
+        annotation_text=f"Call threshold ({int(threshold*100)}%)",
+        annotation_position="top right"
+    )
+    fig_dist.update_layout(
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+        xaxis_title='Order Probability', yaxis_title='Number of Retailers',
+        showlegend=False, height=350
+    )
+    st.plotly_chart(fig_dist, use_container_width=True)
 
     # Hub breakdown
-    st.subheader("📍 Call Distribution by Hub")
+    st.subheader("📍 Call vs Skip by Hub")
     hub_df = preds.groupby('hubName').agg(
-        total=('customerId','count'), call=('will_order','sum')
+        Call=('will_order', 'sum'),
+        Total=('customerId', 'count')
     ).reset_index()
-    hub_df['skip'] = hub_df['total'] - hub_df['call']
-    hub_df = hub_df.sort_values('call', ascending=False)
+    hub_df['Skip'] = hub_df['Total'] - hub_df['Call']
+    hub_df = hub_df.sort_values('Call', ascending=False)
 
-    fig2 = go.Figure([
-        go.Bar(name='Call', x=hub_df['hubName'], y=hub_df['call'],   marker_color='#2196F3'),
-        go.Bar(name='Skip', x=hub_df['hubName'], y=hub_df['skip'],   marker_color='#37474F')
+    fig_hub = go.Figure([
+        go.Bar(name='📞 Call', x=hub_df['hubName'], y=hub_df['Call'],
+               marker_color='#2196F3'),
+        go.Bar(name='⏭️ Skip', x=hub_df['hubName'], y=hub_df['Skip'],
+               marker_color='#37474F')
     ])
-    fig2.update_layout(barmode='stack', plot_bgcolor='rgba(0,0,0,0)',
-                       paper_bgcolor='rgba(0,0,0,0)', xaxis_tickangle=-35,
-                       legend=dict(orientation='h', y=1.05))
-    st.plotly_chart(fig2, use_container_width=True)
+    fig_hub.update_layout(
+        barmode='stack', plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)', xaxis_tickangle=-35,
+        legend=dict(orientation='h', y=1.08), height=380
+    )
+    st.plotly_chart(fig_hub, use_container_width=True)
 
-    # June monthly call volume (if pre-computed)
-    if june_calls is not None:
-        st.subheader("📆 June 2026 — Predicted Daily Call Volume")
-        fig3 = px.bar(june_calls, x='date', y='calls_needed',
-                      color='call_reduction', color_continuous_scale='Blues',
-                      labels={'calls_needed':'Calls Needed','date':'Date',
-                              'call_reduction':'Reduction %'},
-                      title=f'Daily calls needed at {int(threshold*100)}% threshold')
-        fig3.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
-        st.plotly_chart(fig3, use_container_width=True)
+    # May monthly trend (if Notebook B was run)
+    if may_schedule is not None:
+        st.markdown("---")
+        st.subheader("📆 May 2026 — Full Month Call Volume")
+        fig_may = px.bar(
+            may_schedule, x='date', y='calls_needed',
+            color='call_reduction',
+            color_continuous_scale='Blues',
+            labels={'calls_needed': 'Calls Needed', 'date': 'Date',
+                    'call_reduction': 'Reduction %'},
+            hover_data=['day', 'skipped', 'call_reduction']
+        )
+        fig_may.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+            xaxis_tickangle=-35, height=360,
+            coloraxis_colorbar=dict(title='Reduction %')
+        )
+        st.plotly_chart(fig_may, use_container_width=True)
 
-        col1, col2 = st.columns(2)
-        col1.metric("Avg Daily Calls (June)",    f"{june_calls['calls_needed'].mean():.0f}")
-        col2.metric("Avg Call Reduction (June)", f"{june_calls['call_reduction'].mean():.1f}%")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Avg Daily Calls (May)",     f"{may_schedule['calls_needed'].mean():.0f}")
+        m2.metric("Avg Call Reduction",        f"{may_schedule['call_reduction'].mean():.1f}%")
+        m3.metric("Total Calls Saved (May)",   f"{may_schedule['skipped'].sum():,}")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: DAILY CALL LIST
 # ─────────────────────────────────────────────────────────────────────────────
-elif page == PAGE_OPTIONS["daily_call_list"]:
-    st.title(f"Call Priority List — {pred_date.strftime('%B %d, %Y')}")
-    st.markdown("Retailers ranked by order probability. Call top-down.")
+elif page == "Daily Call List":
+    st.title(f"Call Priority List")
+    st.markdown(f"**Date:** {pd.Timestamp(pred_date).strftime('%A, %B %d 2026')} &nbsp;|&nbsp; Ranked by order probability, highest first.")
     st.markdown("---")
 
-    # Filters
+    # Filter bar
     c1, c2, c3 = st.columns(3)
     with c1:
         hub_f  = st.multiselect("Hub",       sorted(preds['hubName'].dropna().unique()))
     with c2:
         shop_f = st.multiselect("Shop Type", sorted(preds['shopType'].dropna().unique()))
     with c3:
-        show   = st.radio("Show", ["All","Call Only","Skip Only"], horizontal=True)
+        show   = st.radio("Show", ["All", "Call Only", "Skip Only"], horizontal=True)
 
     filtered = preds.copy()
     if hub_f:   filtered = filtered[filtered['hubName'].isin(hub_f)]
     if shop_f:  filtered = filtered[filtered['shopType'].isin(shop_f)]
-    if show == "Call Only": filtered = filtered[filtered['will_order']==1]
-    if show == "Skip Only": filtered = filtered[filtered['will_order']==0]
+    if show == "Call Only": filtered = filtered[filtered['will_order'] == 1]
+    if show == "Skip Only": filtered = filtered[filtered['will_order'] == 0]
 
     filtered = filtered.sort_values('order_probability', ascending=False).reset_index(drop=True)
     filtered.index += 1
 
-    st.markdown(f"Showing **{len(filtered):,}** retailers &nbsp;|&nbsp; "
-                f"Call: **{filtered['will_order'].sum():,}** &nbsp;|&nbsp; "
-                f"Skip: **{(filtered['will_order']==0).sum():,}**")
+    # Summary line
+    st.markdown(
+        f"Showing **{len(filtered):,}** retailers &nbsp;|&nbsp; "
+        f"📞 Call: **{filtered['will_order'].sum():,}** &nbsp;|&nbsp; "
+        f"⏭️ Skip: **{(filtered['will_order']==0).sum():,}**"
+    )
+    st.markdown("---")
 
+    # Build display table
     display = filtered[[
-        'customerId','hubName','shopType','retailerType',
-        'order_probability','will_order',
-        'days_since_last_order','avg_gap_between_orders',
-        'days_overdue','orders_last_7_days','total_orders_so_far','app_order_ratio'
+        'customerId', 'hubName', 'shopType', 'retailerType',
+        'order_probability', 'will_order',
+        'days_since_last_order', 'avg_gap_between_orders',
+        'days_overdue', 'orders_last_7_days',
+        'total_orders_so_far', 'app_order_ratio',
+        'last_order_date'
     ]].copy()
 
     display['order_probability']      = (display['order_probability'] * 100).round(1)
     display['avg_gap_between_orders'] = display['avg_gap_between_orders'].round(1)
     display['days_overdue']           = display['days_overdue'].round(1)
     display['app_order_ratio']        = (display['app_order_ratio'] * 100).round(0).astype(int)
-    display['Action']                 = display['will_order'].map({1:'📞 CALL', 0:'⏭️ SKIP'})
+    display['Action']                 = display['will_order'].map({1: '📞 CALL', 0: '⏭️ SKIP'})
+
+    if 'last_order_date' in display.columns:
+        display['last_order_date'] = pd.to_datetime(display['last_order_date']).dt.date
 
     display = display.drop(columns=['will_order']).rename(columns={
         'customerId':             'Retailer ID',
@@ -467,175 +534,319 @@ elif page == PAGE_OPTIONS["daily_call_list"]:
         'retailerType':           'Type',
         'order_probability':      'Prob %',
         'days_since_last_order':  'Days Since Last',
-        'avg_gap_between_orders': 'Avg Gap',
+        'avg_gap_between_orders': 'Avg Gap (days)',
         'days_overdue':           'Days Overdue',
         'orders_last_7_days':     'Orders (7d)',
         'total_orders_so_far':    'Total Orders',
-        'app_order_ratio':        'App Usage %'
+        'app_order_ratio':        'App Usage %',
+        'last_order_date':        'Last Order Date',
     })
 
-    st.dataframe(display, use_container_width=True, height=580)
+    # Colour-code rows
+    def highlight(row):
+        if row['Action'] == '📞 CALL':
+            return ['background-color: #0a2240'] * len(row)
+        return ['background-color: #1a0e0e'] * len(row)
 
-    csv = display.reset_index(names='Rank').to_csv(index=False).encode('utf-8')
-    st.download_button("⬇️ Download Call List CSV", data=csv,
-                       file_name=f"call_list_{pred_date}.csv", mime='text/csv')
+    st.dataframe(
+        display.style.apply(highlight, axis=1),
+        use_container_width=True,
+        height=580
+    )
+
+    # Download
+    csv_bytes = display.reset_index(names='Rank').to_csv(index=False).encode('utf-8')
+    st.download_button(
+        "⬇️ Download Call List CSV",
+        data=csv_bytes,
+        file_name=f"call_list_{pred_date}.csv",
+        mime='text/csv'
+    )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE: JUNE SCHEDULE
+# PAGE: MAY SCHEDULE
 # ─────────────────────────────────────────────────────────────────────────────
-elif page == PAGE_OPTIONS["june_schedule"]:
-    st.title("June 2026 Full Month Call Schedule")
-    st.markdown("Pre-computed predictions for all 30 days of June.")
+elif page == "May Schedule":
+    st.title("May 2026 - Full Month Call Schedule")
+    st.markdown("Pre-computed daily predictions for all 31 days of May. Run Notebook B to generate this.")
     st.markdown("---")
 
-    if june_calls is not None:
-        st.dataframe(june_calls.rename(columns={
-            'date':'Date','day':'Day','calls_needed':'Calls Needed',
-            'skipped':'Skipped','call_reduction':'Reduction %'
-        }), use_container_width=True, hide_index=True)
+    if may_schedule is None:
+        st.warning("File not found: `outputs/may_2026_call_schedule.csv`")
+        st.info("Run **Notebook B → Cell B4** to generate the full May schedule.")
+        st.stop()
 
-        total_june_calls = june_calls['calls_needed'].sum()
-        total_without    = june_calls['skipped'].sum() + total_june_calls
-        june_savings     = int((total_without - total_june_calls) * 8 * 2)
+    # Summary KPIs
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Calls Needed (May)",   f"{may_schedule['calls_needed'].sum():,}")
+    c2.metric("Total Calls Saved (May)",    f"{may_schedule['skipped'].sum():,}")
+    c3.metric("Avg Daily Calls",            f"{may_schedule['calls_needed'].mean():.0f}")
+    c4.metric("Avg Call Reduction",         f"{may_schedule['call_reduction'].mean():.1f}%")
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total Calls Saved (June)", f"{total_without-total_june_calls:,}")
-        c2.metric("Avg Daily Reduction",       f"{june_calls['call_reduction'].mean():.1f}%")
-        c3.metric("Estimated Monthly Savings", f"₹{june_savings:,}")
+    est_saving = int(may_schedule['skipped'].sum() * COST_PER_MIN * AVG_CALL_MINS)
+    st.success(f"💸 Estimated May savings from reduced AI voice calls: **₹{est_saving:,}**")
 
-        csv = june_calls.to_csv(index=False).encode('utf-8')
-        st.download_button("⬇️ Download June Schedule", data=csv,
-                           file_name="june_2026_call_schedule.csv", mime='text/csv')
-    else:
-        st.warning("June schedule not found. Run Notebook 4 fully (Step 6 generates all-June CSV).")
+    st.markdown("---")
+
+    # Bar chart
+    fig = px.bar(
+        may_schedule, x='date', y='calls_needed',
+        color='day',
+        hover_data=['skipped', 'call_reduction'],
+        labels={'calls_needed': 'Calls Needed', 'date': 'Date', 'day': 'Day'}
+    )
+    fig.update_layout(
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+        xaxis_tickangle=-45, height=380,
+        legend=dict(orientation='h', y=1.08)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Table
+    st.subheader("Day-by-Day Breakdown")
+    table = may_schedule.copy()
+    table['date']           = table['date'].dt.date
+    table['call_reduction'] = table['call_reduction'].astype(str) + '%'
+    table = table.rename(columns={
+        'date': 'Date', 'day': 'Day',
+        'calls_needed': 'Calls Needed',
+        'skipped': 'Calls Skipped',
+        'call_reduction': 'Reduction'
+    })
+    st.dataframe(table, use_container_width=True, hide_index=True)
+
+    csv_may = table.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        "⬇️ Download May Schedule CSV",
+        data=csv_may,
+        file_name="may_2026_call_schedule.csv",
+        mime='text/csv'
+    )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: MODEL PERFORMANCE
 # ─────────────────────────────────────────────────────────────────────────────
-elif page == PAGE_OPTIONS["model_performance"]:
+elif page == "Model Performance":
     st.title("Model Performance")
-    st.markdown("Validated on May 2026 (held-out), trained on Jan–Apr 2026.")
+    st.markdown("XGBoost trained on **Jan–Apr 2026**, evaluated on **May 2026** (true held-out test).")
     st.markdown("---")
 
     # Feature importance
-    st.subheader("Feature Importance — XGBoost")
+    st.subheader("Feature Importance")
+    importances = clf_model.feature_importances_
     feat_df = pd.DataFrame({
         'Feature':    FEATURE_COLS,
-        'Importance': model.feature_importances_
+        'Importance': importances
     }).sort_values('Importance', ascending=True)
 
-    fig = px.bar(feat_df, x='Importance', y='Feature', orientation='h',
-                 color='Importance', color_continuous_scale='Blues')
-    fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                      coloraxis_showscale=False, height=600)
-    st.plotly_chart(fig, use_container_width=True)
+    fig_feat = px.bar(
+        feat_df, x='Importance', y='Feature',
+        orientation='h',
+        color='Importance',
+        color_continuous_scale='Blues',
+        labels={'Importance': 'Importance Score', 'Feature': ''}
+    )
+    fig_feat.update_layout(
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+        coloraxis_showscale=False, height=620
+    )
+    st.plotly_chart(fig_feat, use_container_width=True)
 
     st.markdown("---")
-    st.subheader("Threshold Decision Guide")
-    st.markdown("""
-    | Threshold | Strategy | Best For |
-    |---|---|---|
-    | **20–30%** | Cast wide net | Missing orders is costly |
-    | **40%** | Balanced (recommended) | Good balance of calls vs capture |
-    | **60–70%** | High precision | Call volume is the bottleneck |
 
-    **Key metrics explained:**
-    - **Precision** = Of all calls made, how many resulted in an order
-    - **Recall** = Of all retailers who would order, how many did we reach
-    - **Call Reduction** = % fewer calls vs calling every retailer
-    """)
+    # Live threshold table computed on selected date's predictions
+    st.subheader("Threshold Analysis — May Test Set")
+    st.markdown(
+        "The table below is computed on the currently selected date's predictions vs actual labels."
+        " Use this to decide your operating threshold."
+    )
+
+    # We can only compute this if ordered_today exists in preds (it does for May dates since grid covers Jan-May)
+    if 'ordered_today' in preds.columns:
+        probs   = preds['order_probability'].values
+        actuals = preds['ordered_today'].values
+        total_a = int(actuals.sum())
+
+        rows = []
+        for t in [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]:
+            p        = (probs >= t).astype(int)
+            calls    = int(p.sum())
+            captured = int(((p == 1) & (actuals == 1)).sum())
+            missed   = total_a - captured
+            prec     = captured / calls if calls > 0 else 0
+            rec      = captured / total_a if total_a > 0 else 0
+            f1       = (2 * prec * rec / (prec + rec)) if (prec + rec) > 0 else 0
+            red      = (1 - calls / total_r) * 100
+            rows.append({
+                'Threshold':       f'{int(t*100)}%',
+                'Calls Made':      f'{calls:,}',
+                'Call Reduction':  f'{red:.0f}%',
+                'Orders Captured': f'{captured:,}',
+                'Orders Missed':   f'{missed:,}',
+                'Precision':       f'{prec*100:.1f}%',
+                'Recall':          f'{rec*100:.1f}%',
+                'F1':              f'{f1:.3f}'
+            })
+
+        thresh_df = pd.DataFrame(rows)
+
+        def hl_threshold(row):
+            t_val = int(row['Threshold'].replace('%','')) / 100
+            if abs(t_val - threshold) < 0.01:
+                return ['background-color: #1a3a5c; font-weight:bold'] * len(row)
+            return [''] * len(row)
+
+        st.dataframe(
+            thresh_df.style.apply(hl_threshold, axis=1),
+            use_container_width=True,
+            hide_index=True
+        )
+        st.caption(f"Highlighted row = current threshold ({int(threshold*100)}%)")
+    else:
+        st.info("Threshold analysis is available when predictions are made for dates within the dataset (May 2026).")
 
     st.markdown("---")
-    st.subheader("Model Info")
+
+    # Model info card
+    st.subheader("📌 Model Info")
     st.markdown(f"""
-    - **Algorithm:** XGBoost Classifier
-    - **Features:** {len(FEATURE_COLS)} engineered features
-    - **Training data:** Jan 1 – May 31 2026 (full 151 days)
-    - **Predicts for:** June 2026
-    - **Class imbalance handling:** `scale_pos_weight` (neg:pos ratio)
-    - **Top feature:** `days_since_last_order` (recency is strongest signal)
+    | Property | Value |
+    |---|---|
+    | Algorithm | XGBoost Classifier |
+    | Features | {len(FEATURE_COLS)} engineered features |
+    | Training data | Jan 1 – Apr 30 2026 |
+    | Validation data | May 1 – May 31 2026 |
+    | Class imbalance | Handled via `scale_pos_weight` |
+    | Key insight | `days_since_last_order` is the strongest predictor |
     """)
+
+    st.markdown("---")
+    st.subheader("Metric Guide")
+    st.markdown("""
+    | Threshold | Strategy | When to use |
+    |---|---|---|
+    | **20–30%** | Cast wide net | Missing orders is very costly |
+    | **40%** | Balanced recommended | Good call reduction + order capture |
+    | **60–70%** | High precision | Call centre is the bottleneck |
+
+    - **Precision** = Of all calls made, % that resulted in order (higher = less wasted calls)
+    - **Recall** = Of all retailers who would order, % that we called (higher = fewer missed orders)
+    - **F1** = Harmonic mean of Precision and Recall
+    """)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE: NEXT ORDER DATES
 # ─────────────────────────────────────────────────────────────────────────────
-elif page == PAGE_OPTIONS["next_order_dates"]:
-    st.title("Predicted Next Order Dates")
-    st.markdown("When is each retailer expected to order next relative to the selected forecast date?")
+elif page == "Next Order Dates":
+    st.title("Next Order Date Predictions")
+    st.markdown("For each retailer: predicted date of their next order in May 2026. (Phase 2 — Regression)")
     st.markdown("---")
 
-    if june_sched is not None:
-        anchor_date = pd.Timestamp(pred_date)
+    if next_order is None:
+        st.warning("File not found: `outputs/next_order_prediction_may2026.csv`")
+        st.info("Run **Notebook B → Cell B5** to generate next order predictions.")
+        st.stop()
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric(
-            "Due in 1-3 days",
-            int(((june_sched['predicted_next_order_date'] >= anchor_date) &
-                 (june_sched['predicted_next_order_date'] <= anchor_date + timedelta(days=3))).sum())
+    ref_date = pd.Timestamp('2026-05-01')
+
+    # KPI row
+    due_3d = (next_order['predicted_next_order_date'] <= ref_date + timedelta(days=3)).sum()
+    due_7d = (
+        (next_order['predicted_next_order_date'] > ref_date + timedelta(days=3)) &
+        (next_order['predicted_next_order_date'] <= ref_date + timedelta(days=7))
+    ).sum()
+    due_7p = (next_order['predicted_next_order_date'] > ref_date + timedelta(days=7)).sum()
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Due in 1–3 days",  f"{int(due_3d):,}")
+    c2.metric("Due in 4–7 days",  f"{int(due_7d):,}")
+    c3.metric("Due 7+ days away", f"{int(due_7p):,}")
+
+    st.markdown("---")
+
+    # Filters
+    col1, col2 = st.columns(2)
+    with col1:
+        date_filter = st.date_input(
+            "Show retailers due on or before",
+            value=(ref_date + timedelta(days=7)).date(),
+            min_value=pd.Timestamp('2026-05-01').date(),
+            max_value=pd.Timestamp('2026-05-31').date()
         )
-        c2.metric(
-            "Due in 4-7 days",
-            int(((june_sched['predicted_next_order_date'] > anchor_date + timedelta(days=3)) &
-                 (june_sched['predicted_next_order_date'] <= anchor_date + timedelta(days=7))).sum())
-        )
-        c3.metric(
-            "Due after 7 days",
-            int((june_sched['predicted_next_order_date'] > anchor_date + timedelta(days=7)).sum())
+    with col2:
+        hub_f2 = st.multiselect(
+            "Filter by Hub",
+            sorted(next_order['hubName'].dropna().unique())
         )
 
-        st.markdown("---")
+    filtered_n = next_order[
+        next_order['predicted_next_order_date'].dt.date <= date_filter
+    ].copy()
+    if hub_f2:
+        filtered_n = filtered_n[filtered_n['hubName'].isin(hub_f2)]
+    filtered_n = filtered_n.sort_values('predicted_next_order_date')
 
-        col1, col2 = st.columns(2)
-        with col1:
-            date_filter = st.date_input(
-                "Show retailers due on or before",
-                value=min((anchor_date + timedelta(days=7)).date(), forecast_max.date())
-            )
-        with col2:
-            hub_f2 = st.multiselect("Filter by Hub",
-                                     sorted(june_sched['hubName'].dropna().unique()))
+    st.markdown(f"**{len(filtered_n):,} retailers** due by {date_filter}")
 
-        filtered_s = june_sched[june_sched['predicted_next_order_date'].dt.date <= date_filter]
-        if hub_f2:
-            filtered_s = filtered_s[filtered_s['hubName'].isin(hub_f2)]
-        filtered_s = filtered_s.sort_values('predicted_next_order_date')
+    # Display table
+    disp_n = filtered_n[[
+        'customerId', 'hubName', 'shopType', 'retailerType',
+        'last_order_date', 'historical_avg_gap_days',
+        'predicted_days_until_next', 'predicted_next_order_date'
+    ]].copy()
 
-        st.markdown(f"**{len(filtered_s):,} retailers** due by {date_filter}")
+    disp_n['last_order_date']           = disp_n['last_order_date'].dt.date
+    disp_n['predicted_next_order_date'] = disp_n['predicted_next_order_date'].dt.date
+    disp_n['historical_avg_gap_days']   = disp_n['historical_avg_gap_days'].round(1)
+    disp_n['predicted_days_until_next'] = disp_n['predicted_days_until_next'].round(1)
 
-        disp_s = filtered_s[[
-            'customerId','hubName','shopType',
-            'last_order_date','historical_avg_gap_days',
-            'predicted_days_until_next','predicted_next_order_date'
-        ]].copy()
-        disp_s['last_order_date']           = disp_s['last_order_date'].dt.date
-        disp_s['predicted_next_order_date'] = disp_s['predicted_next_order_date'].dt.date
-        disp_s['historical_avg_gap_days']   = disp_s['historical_avg_gap_days'].round(1)
-        disp_s['predicted_days_until_next'] = disp_s['predicted_days_until_next'].round(1)
-        disp_s = disp_s.rename(columns={
-            'customerId':               'Retailer ID',
-            'hubName':                  'Hub',
-            'shopType':                 'Shop Type',
-            'last_order_date':          'Last Order',
-            'historical_avg_gap_days':  'Avg Gap (days)',
-            'predicted_days_until_next':'Days Until Next',
-            'predicted_next_order_date':'Predicted Order Date'
-        })
-        st.dataframe(disp_s, use_container_width=True, height=500, hide_index=True)
+    disp_n = disp_n.rename(columns={
+        'customerId':               'Retailer ID',
+        'hubName':                  'Hub',
+        'shopType':                 'Shop Type',
+        'retailerType':             'Type',
+        'last_order_date':          'Last Order',
+        'historical_avg_gap_days':  'Avg Gap (days)',
+        'predicted_days_until_next':'Days Until Next',
+        'predicted_next_order_date':'Predicted Order Date'
+    })
 
-        csv_s = disp_s.to_csv(index=False).encode('utf-8')
-        st.download_button("Download Schedule CSV", data=csv_s,
-                           file_name="next_order_schedule_june2026.csv", mime='text/csv')
+    st.dataframe(disp_n, use_container_width=True, height=500, hide_index=True)
 
-        st.markdown("---")
-        st.subheader("Expected Orders Per Day")
-        daily = june_sched.groupby(june_sched['predicted_next_order_date'].dt.date).size().reset_index()
-        daily.columns = ['Date','Expected Orders']
-        fig = px.bar(daily, x='Date', y='Expected Orders',
-                     color_discrete_sequence=['#2196F3'])
-        fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                          xaxis_tickangle=-35)
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("Next order schedule not found. Run Notebook 5 first.")
-        st.code("Run: 05_next_order_prediction.ipynb")
+    csv_n = disp_n.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        "⬇️ Download Next Order Schedule CSV",
+        data=csv_n,
+        file_name="next_order_schedule_may2026.csv",
+        mime='text/csv'
+    )
 
+    st.markdown("---")
+
+    # Daily predicted order volume chart
+    st.subheader("📆 Expected Orders Per Day — May 2026")
+    daily_vol = (
+        next_order
+        .groupby(next_order['predicted_next_order_date'].dt.date)
+        .size()
+        .reset_index()
+    )
+    daily_vol.columns = ['Date', 'Expected Orders']
+    daily_vol = daily_vol[
+        (daily_vol['Date'] >= pd.Timestamp('2026-05-01').date()) &
+        (daily_vol['Date'] <= pd.Timestamp('2026-05-31').date())
+    ]
+
+    fig_vol = px.bar(
+        daily_vol, x='Date', y='Expected Orders',
+        color_discrete_sequence=['#2196F3'],
+        labels={'Expected Orders': 'Retailers Expected to Order'}
+    )
+    fig_vol.update_layout(
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+        xaxis_tickangle=-45, height=360
+    )
+    st.plotly_chart(fig_vol, use_container_width=True)
