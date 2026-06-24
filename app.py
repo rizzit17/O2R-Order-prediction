@@ -74,8 +74,7 @@ FEATURE_COLS = [
     'is_month_end',
     'hubName_enc',
     'shopType_enc',
-    'retailerType_enc',
-    'favorite_order_hour'
+    'retailerType_enc'
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -205,7 +204,7 @@ def build_features_for_date(orders, profile, encoders, target_date):
 
     # Assemble
     f = (
-        profile[['customerId', 'hubName', 'shopType', 'retailerType', 'first_order', 'favorite_order_hour', 'best_time_to_call']]
+        profile[['customerId', 'hubName', 'shopType', 'retailerType', 'first_order']]
         .merge(last_ord[['customerId', 'last_order_date', 'days_since_last_order']], on='customerId', how='left')
         .merge(cnt(3),    on='customerId', how='left')
         .merge(cnt(7),    on='customerId', how='left')
@@ -222,10 +221,9 @@ def build_features_for_date(orders, profile, encoders, target_date):
         'orders_last_14_days': 0, 'orders_last_30_days': 0,
         'total_orders_so_far': 0,
         'avg_gap_between_orders': 30, 'std_gap_between_orders': 0,
-        'median_gap': 30, 'app_order_ratio': 0.5, 'tenure_days': 0, 'favorite_order_hour': 0
+        'median_gap': 30, 'app_order_ratio': 0.5, 'tenure_days': 0
     }
     f = f.fillna(fill)
-    f['best_time_to_call'] = f['best_time_to_call'].fillna('Unknown')
 
     f['tenure_days'] = (target_date - pd.to_datetime(f['first_order'])).dt.days
     f['tenure_days'] = f['tenure_days'].clip(lower=0).fillna(0)
@@ -512,7 +510,6 @@ elif page == "Daily Call List":
         'days_since_last_order', 'avg_gap_between_orders',
         'days_overdue', 'orders_last_7_days',
         'total_orders_so_far', 'app_order_ratio',
-        'favorite_order_hour', 'best_time_to_call',
         'last_order_date'
     ]].copy()
 
@@ -521,7 +518,6 @@ elif page == "Daily Call List":
     display['days_overdue']           = display['days_overdue'].round(1)
     display['app_order_ratio']        = (display['app_order_ratio'] * 100).round(0).astype(int)
     display['Action']                 = display['will_order'].map({1: '📞 CALL', 0: '⏭️ SKIP'})
-    display['favorite_order_hour']    = pd.to_datetime(display['favorite_order_hour'].astype(int).astype(str).str.zfill(2), format='%H').dt.strftime('%I %p')
 
     if 'last_order_date' in display.columns:
         display['last_order_date'] = pd.to_datetime(display['last_order_date']).dt.date
@@ -538,8 +534,6 @@ elif page == "Daily Call List":
         'orders_last_7_days':     'Orders (7d)',
         'total_orders_so_far':    'Total Orders',
         'app_order_ratio':        'App Usage %',
-        'favorite_order_hour':    'Order Hour',
-        'best_time_to_call':      'Best Time',
         'last_order_date':        'Last Order Date',
     })
 
@@ -561,7 +555,7 @@ elif page == "Daily Call List":
     # CRM Export logic
     crm_display = display[display['Action'] == '📞 CALL'].reset_index(names='Rank').copy()
     crm_display['Phone Number'] = 'Not Provided'
-    crm_export = crm_display[['Retailer ID', 'Rank', 'Action', 'Order Hour', 'Best Time', 'Phone Number']].copy()
+    crm_export = crm_display[['Retailer ID', 'Rank', 'Action', 'Phone Number']].copy()
     crm_csv = crm_export.to_csv(index=False).encode('utf-8')
 
     d1, d2 = st.columns([1, 1])
