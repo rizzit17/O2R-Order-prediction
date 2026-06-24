@@ -1,4 +1,4 @@
-# DS Group O2R Order Prediction — Complete Project Teaching Guide
+O2R Order Prediction : Complete Project Teaching Guide
 
 ---
 
@@ -7,8 +7,6 @@
 ---
 
 ## Business Problem
-
-DS Group (Dharampal Satyapal Group) operates an Order-to-Retail (O2R) call center. Every day, call center agents ring up retailers to take orders for DS Group products — things like Catch Spices, Rajnigandha, Pass Pass, etc.
 
 Here is the exact problem:
 
@@ -20,7 +18,7 @@ Here is the exact problem:
 
 That means 91% of calls result in NO order. The call center is working extremely hard and getting almost nothing from most of those calls.
 
-DS Group also uses an AI voice agent to handle calls. That agent costs ₹8 per minute. With an average call lasting 2 minutes, that is ₹16 per call. At 10,000 calls a day, that is ₹1,60,000 per day — or roughly ₹41,60,000 per month — spent mostly on calls that produce no order.
+We use AI voice agent to handle calls. That agent costs ₹8 per minute. With an average call lasting 2 minutes, that is ₹16 per call. At 10,000 calls a day, that is ₹1,60,000 per day — or roughly ₹41,60,000 per month — spent mostly on calls that produce no order.
 
 **The company needs to know, every morning before the call center opens: which retailers are actually going to place an order today? Call only those. Skip everyone else.**
 
