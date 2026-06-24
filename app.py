@@ -16,7 +16,6 @@ from datetime import timedelta
 import plotly.express as px
 import plotly.graph_objects as go
 warnings.filterwarnings('ignore')
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
