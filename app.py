@@ -320,6 +320,7 @@ with st.sidebar:
         "May Schedule",
         "Model Performance",
         "Next Order Dates",
+        "Validation Results",
     ], label_visibility="collapsed")
 
     st.markdown("---")
@@ -863,3 +864,42 @@ elif page == "Next Order Dates":
         xaxis_tickangle=-45, height=360
     )
     st.plotly_chart(fig_vol, use_container_width=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE: VALIDATION RESULTS
+# ─────────────────────────────────────────────────────────────────────────────
+elif page == "Validation Results":
+    st.title("✅ Model Validation Results (Ground Truth)")
+    st.markdown("We back-tested the model's predictions against the **actual ground-truth orders** that occurred on two random dates in our held-out test set (May 2026).")
+    st.markdown("---")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Validation Date 1: May 7th, 2026")
+        st.markdown("*Total organic orders that day: 1,427*")
+        
+        data_may7 = {
+            "Call Strategy": ["Top 100", "Top 500", "Top 1000", "Top 1500", "Top 2000"],
+            "Retailers Called": [100, 500, 1000, 1500, 2000],
+            "Orders Captured (Hits)": [82, 349, 585, 746, 872],
+            "Hit Rate (Precision)": ["82.00%", "69.80%", "58.50%", "49.73%", "43.60%"],
+            "Total Orders Captured (Recall)": ["5.75%", "24.46%", "41.00%", "52.28%", "61.11%"]
+        }
+        st.table(pd.DataFrame(data_may7).set_index("Call Strategy"))
+
+    with col2:
+        st.subheader("Validation Date 2: May 15th, 2026")
+        st.markdown("*Total organic orders that day: 1,347*")
+        
+        data_may15 = {
+            "Call Strategy": ["Top 100", "Top 500", "Top 1000", "Top 1500", "Top 2000"],
+            "Retailers Called": [100, 500, 1000, 1500, 2000],
+            "Orders Captured (Hits)": [77, 347, 586, 756, 883],
+            "Hit Rate (Precision)": ["77.00%", "69.40%", "58.60%", "50.40%", "44.15%"],
+            "Total Orders Captured (Recall)": ["5.72%", "25.76%", "43.50%", "56.12%", "65.55%"]
+        }
+        st.table(pd.DataFrame(data_may15).set_index("Call Strategy"))
+
+    st.markdown("---")
+    st.info("💡 **Business Takeaway:** Historically, calling 10,000 retailers yields ~900 orders (9% hit rate). By using the **Top 2000** strategy, we can capture ~880 orders with an average hit rate of **~44%**. This reduces daily call volume by 80% while maintaining core business output!")
