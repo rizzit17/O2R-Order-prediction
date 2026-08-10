@@ -1,11 +1,11 @@
-# 📞 O2R Retailer Order Prediction & Call Centre Optimization
+# B2B Retailer Order Prediction & Call Centre Optimization
 
 ![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?style=for-the-badge&logo=Streamlit&logoColor=white)
 ![XGBoost](https://img.shields.io/badge/XGBoost-172434?style=for-the-badge&logo=xgboost&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Plotly](https://img.shields.io/badge/Plotly-3F4F75?style=for-the-badge&logo=plotly&logoColor=white)
 
-This repository contains the source code for the **O2R Retailer Order Prediction System**, developed as part of a Data Science Internship (2026). The project leverages Machine Learning to optimize outbound call centre operations by predicting which retailers are highly probable to place an order on any given day.
+This repository contains the source code for the **B2B Retailer Order Prediction System**, developed as part of a Data Science Internship (2026). The project leverages Machine Learning to optimize outbound call centre operations by predicting which retailers are highly probable to place an order on any given day.
 
 ## Business Problem & Solution
 **The Problem:** Outbound sales representatives traditionally call every retailer in the database. This approach leads to massive operational costs, wasted agent time, and call fatigue for retailers who are not ready to order.

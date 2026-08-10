@@ -25,3 +25,8 @@ outputs/
 # (Optional) If you don't want to push models, uncomment the line below. 
 # Since your models are <1MB, it's safe to push them so your app works out of the box on GitHub.
 # models/
+
+# Interview prep and internal documents
+O2R_Interview_Prep_*.md
+*.docx
+
