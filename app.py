@@ -20,7 +20,7 @@ warnings.filterwarnings('ignore')
 # PAGE CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="O2R Order Prediction",
+    page_title="B2B Order Prediction",
     layout="wide",
     initial_sidebar_state="expanded"
 )
