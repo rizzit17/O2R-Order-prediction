@@ -13,20 +13,29 @@ __pycache__/
 .ipynb_checkpoints/
 
 # Streamlit
-.streamlit/
+.streamlit/*
+!.streamlit/config.toml
 
-# ⚠️ SENSITIVE DATA - DO NOT PUSH ⚠️
+# ⚠️ SENSITIVE / LARGE RAW DATA - DO NOT PUSH ⚠️
 data/
-processed/
-outputs/
-*.csv
+*.xlsx
 *.parquet
+*.csv
 
-# (Optional) If you don't want to push models, uncomment the line below. 
-# Since your models are <1MB, it's safe to push them so your app works out of the box on GitHub.
-# models/
+# Whitelist minimal artifacts required for hosting dashboard (< 5 MB total)
+!processed/label_encoders.pkl
+!processed/retailer_profiles.parquet
+!processed/orders_clean.parquet
+!outputs/may_2026_call_schedule.csv
+!outputs/next_order_prediction_may2026.csv
+
+# Models (< 2 MB total, safe for GitHub)
+!models/*.pkl
 
 # Interview prep and internal documents
-O2R_Interview_Prep_*.md
+*Interview_Prep*
 *.docx
+*.pdf
+test_sample.md
+
 

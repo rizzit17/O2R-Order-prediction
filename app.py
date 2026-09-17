@@ -26,10 +26,11 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-BASE = r'C:\Users\Rishit\Desktop\O2R-Order-prediction'
+BASE = os.path.dirname(os.path.abspath(__file__))
 # ─────────────────────────────────────────────────────────────────────────────
 
 RAW_PATH        = os.path.join(BASE, 'data',      "Jan - May '26 Data.csv")
+ORDERS_PATH     = os.path.join(BASE, 'processed', 'orders_clean.parquet')
 MODEL_PATH      = os.path.join(BASE, 'models',    'xgboost_order_model.pkl')
 REG_MODEL_PATH  = os.path.join(BASE, 'models',    'xgboost_next_order_model.pkl')
 ENCODER_PATH    = os.path.join(BASE, 'processed', 'label_encoders.pkl')
@@ -125,6 +126,10 @@ def load_profile():
 
 @st.cache_data(show_spinner=False)
 def load_orders():
+    if os.path.exists(ORDERS_PATH):
+        df = pd.read_parquet(ORDERS_PATH)
+        df['createdAt'] = pd.to_datetime(df['createdAt'])
+        return df.sort_values(['customerId', 'createdAt'])
     df = pd.read_csv(RAW_PATH)
     df['createdAt'] = pd.to_datetime(df['createdAt'], dayfirst=True)
     confirmed = df[df['orderStatus'].isin(['Delivered', 'PartiallyDelivered'])]
@@ -277,10 +282,12 @@ for label, path in [
     ('Classification model',  MODEL_PATH),
     ('Label encoders',        ENCODER_PATH),
     ('Retailer profiles',     PROFILE_PATH),
-    ('Raw CSV',               RAW_PATH),
 ]:
     if not os.path.exists(path):
         missing.append(f'❌ {label}: `{path}`')
+
+if not os.path.exists(ORDERS_PATH) and not os.path.exists(RAW_PATH):
+    missing.append(f'❌ Orders data: neither `{ORDERS_PATH}` nor `{RAW_PATH}` exists')
 
 if missing:
     st.error("### Missing files — run Notebook A first")
